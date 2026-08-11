@@ -70,6 +70,7 @@ class GitHubClient:
         path_or_url: str,
         token: str,
         params: Mapping[str, str | int] | None = None,
+        json: object | None = None,
     ) -> httpx.Response:
         url = self._resolve_url(path_or_url)
         headers = {
@@ -85,6 +86,7 @@ class GitHubClient:
                 url,
                 headers=headers,
                 params=params,
+                json=json,
                 timeout=self._timeout,
             )
         except httpx.TimeoutException as error:

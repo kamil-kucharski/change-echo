@@ -14,6 +14,7 @@ from app.services.candidate_discovery import (
     GitHubCandidateDiscoverer,
 )
 from app.services.candidate_enrichment import GitHubCandidateEnricher
+from app.services.check_run_reporting import CheckRunReporter, GitHubCheckRunReporter
 from app.services.pull_request_analysis import (
     GitHubHistoricalAnalyzer,
     HistoricalAnalyzer,
@@ -29,6 +30,7 @@ def create_app(
     installation_token_provider: InstallationTokenProvider | None = None,
     pull_request_inspector: PullRequestInspector | None = None,
     historical_analyzer: HistoricalAnalyzer | None = None,
+    check_run_reporter: CheckRunReporter | None = None,
 ) -> FastAPI:
     resolved_settings = app_settings if app_settings is not None else Settings()
     logging.getLogger("app").setLevel(resolved_settings.log_level.upper())
@@ -39,6 +41,7 @@ def create_app(
             installation_token_provider is not None
             and pull_request_inspector is not None
             and historical_analyzer is not None
+            and check_run_reporter is not None
         ):
             yield
             return
@@ -69,6 +72,10 @@ def create_app(
                     candidate_discoverer,
                     candidate_enricher,
                 )
+            if check_run_reporter is None:
+                application.state.check_run_reporter = GitHubCheckRunReporter(
+                    github_client
+                )
             yield
 
     application = FastAPI(
@@ -83,6 +90,8 @@ def create_app(
         application.state.pull_request_inspector = pull_request_inspector
     if historical_analyzer is not None:
         application.state.historical_analyzer = historical_analyzer
+    if check_run_reporter is not None:
+        application.state.check_run_reporter = check_run_reporter
     application.include_router(health_router)
     application.include_router(webhook_router)
     return application

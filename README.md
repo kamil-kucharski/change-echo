@@ -29,10 +29,12 @@ The application currently:
   accepted webhook and logs aggregate result counts;
 - renders deterministic completed Check Run content for matches, no matches,
   partial analyses, and intentionally skipped oversized pull requests;
+- publishes each completed analysis as an advisory `Change Echo` Check Run on
+  the current pull request head commit;
 - uses bounded pagination, request timeouts, and typed GitHub error handling.
 
-Sending rendered Check Run results through the GitHub API is not implemented
-yet, so completed analysis results are not displayed on the pull request.
+Each accepted delivery creates one completed Check Run. Persistent delivery
+deduplication is not implemented.
 
 ## Requirements
 
@@ -106,6 +108,9 @@ The GitHub webhook endpoint is:
 POST /webhooks/github
 ```
 
+The installed GitHub App must have repository `Checks` permission set to
+`Read and write` so it can publish analysis results.
+
 Supported pull-request actions are `opened`, `reopened`, `synchronize`, and
 `edited`. Unsupported events and actions are acknowledged and ignored. A pull
 request exceeding `ECHO_MAX_CURRENT_FILES` receives an explicit bounded-analysis
@@ -113,8 +118,8 @@ response instead of being partially inspected.
 
 For an accepted pull request, the application also checks recent commits for
 each changed path and maps those commits to historical pull requests. Candidate
-discovery is deterministic and bounded, but candidates are not displayed on the
-pull request until Check Run API reporting is implemented.
+discovery is deterministic and bounded. The final result is displayed as an
+advisory Check Run and does not intentionally block merging.
 
 ## Development checks
 

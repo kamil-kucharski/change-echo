@@ -2,10 +2,15 @@ import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 
 from app.config import Settings
 from app.github.auth import GitHubConfigurationError, InstallationTokenProvider
+from app.github.check_rendering import (
+    RenderedCheckRun,
+    render_analysis_check,
+    render_large_pull_request_check,
+)
 from app.github.client import (
     GitHubAPIError,
     GitHubNetworkError,
@@ -19,6 +24,7 @@ from app.github.models import (
     PullRequestWebhookPayload,
 )
 from app.github.signatures import verify_webhook_signature
+from app.services.check_run_reporting import CheckRunReporter
 from app.services.pull_request_analysis import HistoricalAnalyzer
 from app.services.pull_request_inspection import (
     CompletePullRequestInspection,
@@ -52,6 +58,11 @@ def historical_analyzer_from_request(request: Request) -> HistoricalAnalyzer:
     return analyzer
 
 
+def check_run_reporter_from_request(request: Request) -> CheckRunReporter:
+    reporter: CheckRunReporter = request.app.state.check_run_reporter
+    return reporter
+
+
 @router.post("/webhooks/github")
 async def receive_github_webhook(
     request: Request,
@@ -67,6 +78,10 @@ async def receive_github_webhook(
     historical_analyzer: Annotated[
         HistoricalAnalyzer,
         Depends(historical_analyzer_from_request),
+    ],
+    check_run_reporter: Annotated[
+        CheckRunReporter,
+        Depends(check_run_reporter_from_request),
     ],
 ) -> dict[str, str]:
     raw_body = await request.body()
@@ -244,6 +259,16 @@ async def receive_github_webhook(
         ) from None
 
     if isinstance(inspection, PullRequestTooLarge):
+        check_result = render_large_pull_request_check(inspection.max_files)
+        await _publish_check_run(
+            reporter=check_run_reporter,
+            repository_full_name=context.repository_full_name,
+            head_sha=context.head_sha,
+            result=check_result,
+            installation_token=access_token.token,
+            delivery_id=context.delivery_id,
+            pull_request_number=context.pull_request_number,
+        )
         logger.info(
             "github_webhook status=analysis_skipped reason=pull_request_too_large "
             "delivery_id=%r repository=%r pr_number=%d max_current_files=%d",
@@ -307,6 +332,22 @@ async def receive_github_webhook(
             detail="Historical analysis failed",
         ) from None
 
+    check_result = render_analysis_check(
+        changed_file_count=len(inspection.files),
+        candidate_count=analysis.candidate_count,
+        skipped_candidate_count=analysis.skipped_candidate_count,
+        echoes=analysis.echoes,
+    )
+    await _publish_check_run(
+        reporter=check_run_reporter,
+        repository_full_name=context.repository_full_name,
+        head_sha=context.head_sha,
+        result=check_result,
+        installation_token=access_token.token,
+        delivery_id=context.delivery_id,
+        pull_request_number=context.pull_request_number,
+    )
+
     logger.info(
         "github_webhook status=accepted delivery_id=%r event=%r action=%r "
         "repository=%r pr_number=%d changed_files=%d candidate_count=%d "
@@ -322,3 +363,55 @@ async def receive_github_webhook(
         len(analysis.echoes),
     )
     return {"status": "accepted"}
+
+
+async def _publish_check_run(
+    *,
+    reporter: CheckRunReporter,
+    repository_full_name: str,
+    head_sha: str,
+    result: RenderedCheckRun,
+    installation_token: SecretStr,
+    delivery_id: str,
+    pull_request_number: int,
+) -> None:
+    try:
+        await reporter.publish(
+            repository_full_name=repository_full_name,
+            head_sha=head_sha,
+            result=result,
+            installation_token=installation_token,
+        )
+    except (
+        GitHubNetworkError,
+        GitHubRateLimitError,
+        GitHubServerError,
+        GitHubTimeoutError,
+    ) as error:
+        logger.error(
+            "github_webhook status=reporting_failed error_type=%s github_status=%r "
+            "delivery_id=%r repository=%r pr_number=%d",
+            type(error).__name__,
+            error.status_code,
+            delivery_id,
+            repository_full_name,
+            pull_request_number,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="GitHub Check Run reporting is temporarily unavailable",
+        ) from None
+    except GitHubAPIError as error:
+        logger.error(
+            "github_webhook status=reporting_failed error_type=%s github_status=%r "
+            "delivery_id=%r repository=%r pr_number=%d",
+            type(error).__name__,
+            error.status_code,
+            delivery_id,
+            repository_full_name,
+            pull_request_number,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="GitHub Check Run reporting failed",
+        ) from None
