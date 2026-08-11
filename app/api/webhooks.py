@@ -19,7 +19,7 @@ from app.github.models import (
     PullRequestWebhookPayload,
 )
 from app.github.signatures import verify_webhook_signature
-from app.services.candidate_discovery import CandidateDiscoverer
+from app.services.pull_request_analysis import HistoricalAnalyzer
 from app.services.pull_request_inspection import (
     CompletePullRequestInspection,
     PullRequestInspector,
@@ -47,9 +47,9 @@ def pull_request_inspector_from_request(request: Request) -> PullRequestInspecto
     return inspector
 
 
-def candidate_discoverer_from_request(request: Request) -> CandidateDiscoverer:
-    discoverer: CandidateDiscoverer = request.app.state.candidate_discoverer
-    return discoverer
+def historical_analyzer_from_request(request: Request) -> HistoricalAnalyzer:
+    analyzer: HistoricalAnalyzer = request.app.state.historical_analyzer
+    return analyzer
 
 
 @router.post("/webhooks/github")
@@ -64,9 +64,9 @@ async def receive_github_webhook(
         PullRequestInspector,
         Depends(pull_request_inspector_from_request),
     ],
-    candidate_discoverer: Annotated[
-        CandidateDiscoverer,
-        Depends(candidate_discoverer_from_request),
+    historical_analyzer: Annotated[
+        HistoricalAnalyzer,
+        Depends(historical_analyzer_from_request),
     ],
 ) -> dict[str, str]:
     raw_body = await request.body()
@@ -258,13 +258,18 @@ async def receive_github_webhook(
         raise RuntimeError("Unexpected pull request inspection result")
 
     try:
-        candidates = await candidate_discoverer.discover(
+        analysis = await historical_analyzer.analyze(
             repository_full_name=context.repository_full_name,
             current_pull_request_number=context.pull_request_number,
+            current_title=context.pull_request_title,
+            current_body=context.pull_request_body,
             current_file_paths=tuple(file.filename for file in inspection.files),
             installation_token=access_token.token,
             max_commits_per_path=app_settings.echo_max_commits_per_path,
             max_unique_candidates=app_settings.echo_max_unique_candidates,
+            max_results=app_settings.echo_max_results,
+            possible_threshold=app_settings.echo_possible_threshold,
+            strong_threshold=app_settings.echo_strong_threshold,
         )
     except (
         GitHubNetworkError,
@@ -273,7 +278,7 @@ async def receive_github_webhook(
         GitHubTimeoutError,
     ) as error:
         logger.error(
-            "github_webhook status=analysis_failed stage=candidate_discovery "
+            "github_webhook status=analysis_failed stage=historical_analysis "
             "error_type=%s github_status=%r delivery_id=%r repository=%r "
             "pr_number=%d",
             type(error).__name__,
@@ -284,11 +289,11 @@ async def receive_github_webhook(
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Historical candidate discovery is temporarily unavailable",
+            detail="Historical analysis is temporarily unavailable",
         ) from None
     except GitHubAPIError as error:
         logger.error(
-            "github_webhook status=analysis_failed stage=candidate_discovery "
+            "github_webhook status=analysis_failed stage=historical_analysis "
             "error_type=%s github_status=%r delivery_id=%r repository=%r "
             "pr_number=%d",
             type(error).__name__,
@@ -299,18 +304,21 @@ async def receive_github_webhook(
         )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Historical candidate discovery failed",
+            detail="Historical analysis failed",
         ) from None
 
     logger.info(
         "github_webhook status=accepted delivery_id=%r event=%r action=%r "
-        "repository=%r pr_number=%d changed_files=%d candidate_count=%d",
+        "repository=%r pr_number=%d changed_files=%d candidate_count=%d "
+        "skipped_candidate_count=%d result_count=%d",
         context.delivery_id,
         context.event,
         context.action,
         context.repository_full_name,
         context.pull_request_number,
         len(inspection.files),
-        len(candidates),
+        analysis.candidate_count,
+        analysis.skipped_candidate_count,
+        len(analysis.echoes),
     )
     return {"status": "accepted"}

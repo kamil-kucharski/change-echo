@@ -35,6 +35,8 @@ class PullRequestHeadPayload(BaseModel):
 
 
 class PullRequestPayload(BaseModel):
+    title: str = Field(min_length=1)
+    body: str | None = None
     head: PullRequestHeadPayload
 
 
@@ -45,6 +47,8 @@ class PullRequestContext:
     action: SupportedPullRequestAction
     repository_full_name: str
     pull_request_number: int
+    pull_request_title: str
+    pull_request_body: str | None
     head_sha: str
     installation_id: int
 
@@ -63,6 +67,8 @@ class PullRequestWebhookPayload(BaseModel):
             action=self.action,
             repository_full_name=self.repository.full_name,
             pull_request_number=self.number,
+            pull_request_title=self.pull_request.title,
+            pull_request_body=self.pull_request.body,
             head_sha=self.pull_request.head.sha,
             installation_id=self.installation.id,
         )

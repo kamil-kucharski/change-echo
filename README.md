@@ -25,10 +25,12 @@ The application currently:
   isolated inaccessible, malformed, empty, or oversized candidates;
 - provides deterministic Echo scoring, classification, outcome classification,
   and ranking for enriched pull-request data;
+- runs candidate discovery, enrichment, scoring, and bounded ranking for each
+  accepted webhook and logs aggregate result counts;
 - uses bounded pagination, request timeouts, and typed GitHub error handling.
 
-Candidate enrichment and scoring are not connected to live webhook processing
-yet. Check Run reporting is also not implemented.
+Check Run reporting is not implemented yet, so completed analysis results are
+not displayed on the pull request.
 
 ## Requirements
 
@@ -110,7 +112,7 @@ response instead of being partially inspected.
 For an accepted pull request, the application also checks recent commits for
 each changed path and maps those commits to historical pull requests. Candidate
 discovery is deterministic and bounded, but candidates are not displayed on the
-pull request until scoring and Check Run reporting are implemented.
+pull request until Check Run reporting is implemented.
 
 ## Development checks
 

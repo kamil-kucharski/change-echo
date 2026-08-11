@@ -8,6 +8,8 @@
     "full_name": "octo-org/change-echo-test"
   },
   "pull_request": {
+    "title": "Add repository memory lookup",
+    "body": "Surface related historical pull requests.",
     "head": {
       "sha": "0123456789abcdef0123456789abcdef01234567"
     }

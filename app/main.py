@@ -11,8 +11,12 @@ from app.config import Settings
 from app.github.auth import GitHubAppAuthenticator, InstallationTokenProvider
 from app.github.client import DEFAULT_TIMEOUT_SECONDS, GitHubClient
 from app.services.candidate_discovery import (
-    CandidateDiscoverer,
     GitHubCandidateDiscoverer,
+)
+from app.services.candidate_enrichment import GitHubCandidateEnricher
+from app.services.pull_request_analysis import (
+    GitHubHistoricalAnalyzer,
+    HistoricalAnalyzer,
 )
 from app.services.pull_request_inspection import (
     GitHubPullRequestInspector,
@@ -24,7 +28,7 @@ def create_app(
     app_settings: Settings | None = None,
     installation_token_provider: InstallationTokenProvider | None = None,
     pull_request_inspector: PullRequestInspector | None = None,
-    candidate_discoverer: CandidateDiscoverer | None = None,
+    historical_analyzer: HistoricalAnalyzer | None = None,
 ) -> FastAPI:
     resolved_settings = app_settings if app_settings is not None else Settings()
     logging.getLogger("app").setLevel(resolved_settings.log_level.upper())
@@ -34,7 +38,7 @@ def create_app(
         if (
             installation_token_provider is not None
             and pull_request_inspector is not None
-            and candidate_discoverer is not None
+            and historical_analyzer is not None
         ):
             yield
             return
@@ -52,13 +56,18 @@ def create_app(
                     app_id=resolved_settings.github_app_id,
                     private_key_path=resolved_settings.github_private_key_path,
                 )
-            if pull_request_inspector is None:
-                application.state.pull_request_inspector = GitHubPullRequestInspector(
-                    github_client
-                )
-            if candidate_discoverer is None:
-                application.state.candidate_discoverer = GitHubCandidateDiscoverer(
-                    github_client
+            resolved_inspector = (
+                pull_request_inspector
+                if pull_request_inspector is not None
+                else GitHubPullRequestInspector(github_client)
+            )
+            application.state.pull_request_inspector = resolved_inspector
+            if historical_analyzer is None:
+                candidate_discoverer = GitHubCandidateDiscoverer(github_client)
+                candidate_enricher = GitHubCandidateEnricher(resolved_inspector)
+                application.state.historical_analyzer = GitHubHistoricalAnalyzer(
+                    candidate_discoverer,
+                    candidate_enricher,
                 )
             yield
 
@@ -72,8 +81,8 @@ def create_app(
         application.state.installation_token_provider = installation_token_provider
     if pull_request_inspector is not None:
         application.state.pull_request_inspector = pull_request_inspector
-    if candidate_discoverer is not None:
-        application.state.candidate_discoverer = candidate_discoverer
+    if historical_analyzer is not None:
+        application.state.historical_analyzer = historical_analyzer
     application.include_router(health_router)
     application.include_router(webhook_router)
     return application
