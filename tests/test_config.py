@@ -1,3 +1,6 @@
+import pytest
+from pydantic import ValidationError
+
 from app.config import Settings
 
 
@@ -12,6 +15,9 @@ def test_settings_have_safe_defaults(monkeypatch) -> None:
     monkeypatch.delenv("ECHO_MAX_CURRENT_FILES", raising=False)
     monkeypatch.delenv("ECHO_MAX_COMMITS_PER_PATH", raising=False)
     monkeypatch.delenv("ECHO_MAX_UNIQUE_CANDIDATES", raising=False)
+    monkeypatch.delenv("ECHO_MAX_RESULTS", raising=False)
+    monkeypatch.delenv("ECHO_POSSIBLE_THRESHOLD", raising=False)
+    monkeypatch.delenv("ECHO_STRONG_THRESHOLD", raising=False)
 
     settings = Settings(_env_file=None)
 
@@ -25,6 +31,9 @@ def test_settings_have_safe_defaults(monkeypatch) -> None:
     assert settings.echo_max_current_files == 100
     assert settings.echo_max_commits_per_path == 20
     assert settings.echo_max_unique_candidates == 40
+    assert settings.echo_max_results == 3
+    assert settings.echo_possible_threshold == 0.55
+    assert settings.echo_strong_threshold == 0.72
 
 
 def test_settings_read_environment(monkeypatch) -> None:
@@ -38,6 +47,9 @@ def test_settings_read_environment(monkeypatch) -> None:
     monkeypatch.setenv("ECHO_MAX_CURRENT_FILES", "250")
     monkeypatch.setenv("ECHO_MAX_COMMITS_PER_PATH", "25")
     monkeypatch.setenv("ECHO_MAX_UNIQUE_CANDIDATES", "50")
+    monkeypatch.setenv("ECHO_MAX_RESULTS", "5")
+    monkeypatch.setenv("ECHO_POSSIBLE_THRESHOLD", "0.6")
+    monkeypatch.setenv("ECHO_STRONG_THRESHOLD", "0.8")
 
     settings = Settings(_env_file=None)
 
@@ -53,3 +65,15 @@ def test_settings_read_environment(monkeypatch) -> None:
     assert settings.echo_max_current_files == 250
     assert settings.echo_max_commits_per_path == 25
     assert settings.echo_max_unique_candidates == 50
+    assert settings.echo_max_results == 5
+    assert settings.echo_possible_threshold == 0.6
+    assert settings.echo_strong_threshold == 0.8
+
+
+def test_settings_reject_inverted_echo_thresholds() -> None:
+    with pytest.raises(ValidationError, match="ECHO_POSSIBLE_THRESHOLD"):
+        Settings(
+            _env_file=None,
+            echo_possible_threshold=0.8,
+            echo_strong_threshold=0.6,
+        )

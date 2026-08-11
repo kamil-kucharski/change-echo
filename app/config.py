@@ -1,7 +1,7 @@
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Self
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -23,3 +23,14 @@ class Settings(BaseSettings):
     echo_max_current_files: Annotated[int, Field(gt=0, le=2999)] = 100
     echo_max_commits_per_path: Annotated[int, Field(gt=0, le=100)] = 20
     echo_max_unique_candidates: Annotated[int, Field(gt=0)] = 40
+    echo_max_results: Annotated[int, Field(gt=0)] = 3
+    echo_possible_threshold: Annotated[float, Field(ge=0.0, le=1.0)] = 0.55
+    echo_strong_threshold: Annotated[float, Field(ge=0.0, le=1.0)] = 0.72
+
+    @model_validator(mode="after")
+    def validate_echo_thresholds(self) -> Self:
+        if self.echo_possible_threshold > self.echo_strong_threshold:
+            raise ValueError(
+                "ECHO_POSSIBLE_THRESHOLD must not exceed ECHO_STRONG_THRESHOLD"
+            )
+        return self

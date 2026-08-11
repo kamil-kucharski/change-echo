@@ -19,10 +19,13 @@ The application currently:
   current file paths;
 - deduplicates candidates, excludes the current pull request, and applies
   deterministic discovery limits;
+- provides deterministic Echo scoring, classification, outcome classification,
+  and ranking for enriched pull-request data;
 - uses bounded pagination, request timeouts, and typed GitHub error handling.
 
-Candidate enrichment, similarity scoring, and Check Run reporting are not
-implemented yet.
+Candidate enrichment and Check Run reporting are not implemented yet. The
+scoring module remains disconnected from live webhook processing until the
+required candidate metadata and changed-file sets are available.
 
 ## Requirements
 
@@ -72,6 +75,9 @@ Set these values in the local `.env` file:
 | `ECHO_MAX_CURRENT_FILES` | Maximum changed files inspected in a PR | `100` |
 | `ECHO_MAX_COMMITS_PER_PATH` | Recent commits inspected for each changed path | `20` |
 | `ECHO_MAX_UNIQUE_CANDIDATES` | Maximum deduplicated historical PR candidates | `40` |
+| `ECHO_MAX_RESULTS` | Maximum relevant echoes returned by ranking | `3` |
+| `ECHO_POSSIBLE_THRESHOLD` | Minimum score classified as a possible echo | `0.55` |
+| `ECHO_STRONG_THRESHOLD` | Minimum score classified as a strong echo | `0.72` |
 
 Never commit `.env`, private keys, installation tokens, or generated
 credentials. The private key is read from the configured file path and its
