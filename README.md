@@ -27,10 +27,12 @@ The application currently:
   and ranking for enriched pull-request data;
 - runs candidate discovery, enrichment, scoring, and bounded ranking for each
   accepted webhook and logs aggregate result counts;
+- renders deterministic completed Check Run content for matches, no matches,
+  partial analyses, and intentionally skipped oversized pull requests;
 - uses bounded pagination, request timeouts, and typed GitHub error handling.
 
-Check Run reporting is not implemented yet, so completed analysis results are
-not displayed on the pull request.
+Sending rendered Check Run results through the GitHub API is not implemented
+yet, so completed analysis results are not displayed on the pull request.
 
 ## Requirements
 
@@ -112,7 +114,7 @@ response instead of being partially inspected.
 For an accepted pull request, the application also checks recent commits for
 each changed path and maps those commits to historical pull requests. Candidate
 discovery is deterministic and bounded, but candidates are not displayed on the
-pull request until Check Run reporting is implemented.
+pull request until Check Run API reporting is implemented.
 
 ## Development checks
 
