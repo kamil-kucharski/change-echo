@@ -9,6 +9,7 @@ from app.github.auth import GitHubConfigurationError, InstallationTokenProvider
 from app.github.check_rendering import (
     RenderedCheckRun,
     render_analysis_check,
+    render_analysis_failure_check,
     render_large_pull_request_check,
 )
 from app.github.client import (
@@ -239,6 +240,14 @@ async def receive_github_webhook(
             context.repository_full_name,
             context.pull_request_number,
         )
+        await _publish_analysis_failure_check(
+            reporter=check_run_reporter,
+            repository_full_name=context.repository_full_name,
+            head_sha=context.head_sha,
+            installation_token=access_token.token,
+            delivery_id=context.delivery_id,
+            pull_request_number=context.pull_request_number,
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Pull request inspection is temporarily unavailable",
@@ -252,6 +261,14 @@ async def receive_github_webhook(
             context.delivery_id,
             context.repository_full_name,
             context.pull_request_number,
+        )
+        await _publish_analysis_failure_check(
+            reporter=check_run_reporter,
+            repository_full_name=context.repository_full_name,
+            head_sha=context.head_sha,
+            installation_token=access_token.token,
+            delivery_id=context.delivery_id,
+            pull_request_number=context.pull_request_number,
         )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -312,6 +329,14 @@ async def receive_github_webhook(
             context.repository_full_name,
             context.pull_request_number,
         )
+        await _publish_analysis_failure_check(
+            reporter=check_run_reporter,
+            repository_full_name=context.repository_full_name,
+            head_sha=context.head_sha,
+            installation_token=access_token.token,
+            delivery_id=context.delivery_id,
+            pull_request_number=context.pull_request_number,
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Historical analysis is temporarily unavailable",
@@ -326,6 +351,14 @@ async def receive_github_webhook(
             context.delivery_id,
             context.repository_full_name,
             context.pull_request_number,
+        )
+        await _publish_analysis_failure_check(
+            reporter=check_run_reporter,
+            repository_full_name=context.repository_full_name,
+            head_sha=context.head_sha,
+            installation_token=access_token.token,
+            delivery_id=context.delivery_id,
+            pull_request_number=context.pull_request_number,
         )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -415,3 +448,31 @@ async def _publish_check_run(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="GitHub Check Run reporting failed",
         ) from None
+
+
+async def _publish_analysis_failure_check(
+    *,
+    reporter: CheckRunReporter,
+    repository_full_name: str,
+    head_sha: str,
+    installation_token: SecretStr,
+    delivery_id: str,
+    pull_request_number: int,
+) -> None:
+    try:
+        await reporter.publish(
+            repository_full_name=repository_full_name,
+            head_sha=head_sha,
+            result=render_analysis_failure_check(),
+            installation_token=installation_token,
+        )
+    except GitHubAPIError as error:
+        logger.error(
+            "github_webhook status=error_check_reporting_failed error_type=%s "
+            "github_status=%r delivery_id=%r repository=%r pr_number=%d",
+            type(error).__name__,
+            error.status_code,
+            delivery_id,
+            repository_full_name,
+            pull_request_number,
+        )

@@ -493,7 +493,10 @@ async def test_pull_request_inspection_failure_is_reported_coherently(
     assert token_provider.requested_installation_ids == [123456]
     assert inspector.requests == [("octo-org/change-echo-test", 42, 100)]
     assert analyzer.requests == []
-    assert reporter.requests == []
+    assert len(reporter.requests) == 1
+    _, _, check_result = reporter.requests[0]
+    assert check_result.conclusion is CheckRunConclusion.NEUTRAL
+    assert check_result.title == "Analysis could not be completed"
 
 
 @pytest.mark.asyncio
@@ -524,7 +527,46 @@ async def test_historical_analysis_failure_is_reported_coherently(
     assert token_provider.requested_installation_ids == [123456]
     assert inspector.requests == [("octo-org/change-echo-test", 42, 100)]
     assert len(analyzer.requests) == 1
-    assert reporter.requests == []
+    assert len(reporter.requests) == 1
+    _, _, check_result = reporter.requests[0]
+    assert check_result.conclusion is CheckRunConclusion.NEUTRAL
+    assert check_result.title == "Analysis could not be completed"
+
+
+@pytest.mark.asyncio
+async def test_analysis_error_is_preserved_when_error_check_cannot_be_published(
+    pull_request_payload: bytes,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.ERROR, logger="app.api.webhooks")
+    analysis_error = GitHubNotFoundError(
+        "GitHub API resource not found",
+        status_code=404,
+    )
+    reporting_error = GitHubPermissionError(
+        "GitHub API permission denied",
+        status_code=403,
+    )
+
+    async with webhook_client(
+        inspection_error=analysis_error,
+        reporting_error=reporting_error,
+    ) as (client, token_provider, inspector, analyzer, reporter):
+        response = await client.post(
+            "/webhooks/github",
+            content=pull_request_payload,
+            headers=github_headers(pull_request_payload),
+        )
+
+    assert response.status_code == 502
+    assert response.json() == {"detail": "Pull request inspection failed"}
+    assert "status=analysis_failed" in caplog.text
+    assert "status=error_check_reporting_failed" in caplog.text
+    assert "temporary-installation-token" not in caplog.text
+    assert token_provider.requested_installation_ids == [123456]
+    assert inspector.requests == [("octo-org/change-echo-test", 42, 100)]
+    assert analyzer.requests == []
+    assert len(reporter.requests) == 1
 
 
 @pytest.mark.asyncio

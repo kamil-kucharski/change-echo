@@ -1,47 +1,64 @@
 # Change Echo
 
-Change Echo is an advisory GitHub App that helps repositories surface earlier
-pull requests related to a current change. The application is designed to
-preserve repository memory without blocking merges or judging code quality.
+Change Echo is an advisory GitHub App that finds historically similar pull
+requests in the same repository. It helps reviewers understand whether a
+related change was attempted before and what happened to it.
 
-## Current capabilities
+Change Echo uses deterministic scoring based on changed files, directories,
+pull-request titles, and descriptions. It does not use AI, block merges, or
+judge whether a change should be accepted.
 
-The application currently:
+## How it works
 
-- exposes `GET /health`;
-- validates GitHub webhook signatures against the raw request body;
-- accepts supported `pull_request` webhook actions;
-- authenticates as a GitHub App with a short-lived RS256 JWT;
-- obtains an installation access token using the webhook installation ID;
-- retrieves the complete changed-file list for the current pull request;
-- stops inspection explicitly when the configured file limit is exceeded;
-- discovers historical pull-request candidates from recent commits touching the
-  current file paths;
-- deduplicates candidates, excludes the current pull request, and applies
-  deterministic discovery limits;
-- retains candidate titles, bodies, states, outcome timestamps, and links from
-  GitHub's commit-to-pull-request response;
-- can enrich candidates with complete, bounded changed-file sets while skipping
-  isolated inaccessible, malformed, empty, or oversized candidates;
-- provides deterministic Echo scoring, classification, outcome classification,
-  and ranking for enriched pull-request data;
-- runs candidate discovery, enrichment, scoring, and bounded ranking for each
-  accepted webhook and logs aggregate result counts;
-- renders deterministic completed Check Run content for matches, no matches,
-  partial analyses, and intentionally skipped oversized pull requests;
-- publishes each completed analysis as an advisory `Change Echo` Check Run on
-  the current pull request head commit;
-- uses bounded pagination, request timeouts, and typed GitHub error handling.
+When a pull request is opened, reopened, updated, or edited, Change Echo:
 
-Each accepted delivery creates one completed Check Run. Persistent delivery
-deduplication is not implemented.
+1. verifies the GitHub webhook signature;
+2. retrieves the pull request's changed files;
+3. finds historical pull requests connected to recent commits touching those
+   files;
+4. scores and ranks the most relevant matches;
+5. publishes the result as a `Change Echo` Check Run on the pull request.
 
-## Requirements
+A check reports:
 
-- Python 3.12 or newer
-- A GitHub App ID, private key file, and webhook secret for live webhook handling
+- `success` when no meaningful historical echo is found;
+- `neutral` when a possible or strong echo is found;
+- `neutral` when analysis is safely limited, skipped, or cannot be completed.
+
+Historical matches include the Echo Score, historical outcome, factual match
+reasons, and a link to the earlier pull request. All results are advisory.
+
+## GitHub App configuration
+
+Configure the GitHub App with these repository permissions:
+
+| Permission | Access |
+| --- | --- |
+| Metadata | Read |
+| Pull requests | Read |
+| Contents | Read |
+| Checks | Read and write |
+
+Subscribe to the `pull_request` webhook. The application handles the `opened`,
+`reopened`, `synchronize`, and `edited` actions.
+
+Set the webhook URL to:
+
+```text
+https://<public-host>/webhooks/github
+```
+
+Use the same webhook secret in the GitHub App settings and the local `.env`
+file.
 
 ## Local setup
+
+Requirements:
+
+- Python 3.12 or newer;
+- a GitHub App ID;
+- a downloaded GitHub App private key;
+- a webhook secret.
 
 Create and activate a virtual environment:
 
@@ -50,9 +67,10 @@ python -m venv .venv
 source .venv/bin/activate
 ```
 
-On Windows PowerShell, activate it with:
+On Windows PowerShell:
 
 ```powershell
+python -m venv .venv
 .venv\Scripts\Activate.ps1
 ```
 
@@ -62,72 +80,66 @@ Install the application and development dependencies:
 python -m pip install -e ".[dev]"
 ```
 
-Copy the example configuration:
+Create the local configuration file:
 
 ```bash
 cp .env.example .env
 ```
 
-On Windows PowerShell, use `Copy-Item .env.example .env`.
+On Windows PowerShell:
 
-Set these values in the local `.env` file:
+```powershell
+Copy-Item .env.example .env
+```
 
-| Variable | Purpose | Default |
-| --- | --- | --- |
-| `APP_ENV` | Application environment | `development` |
-| `LOG_LEVEL` | Application log level | `INFO` |
-| `GITHUB_APP_ID` | Numeric GitHub App ID | required for webhook processing |
-| `GITHUB_PRIVATE_KEY_PATH` | Path to the GitHub App private key file | required for webhook processing |
-| `GITHUB_WEBHOOK_SECRET` | Secret used to verify webhook signatures | required for webhook processing |
-| `GITHUB_API_BASE_URL` | GitHub REST API base URL | `https://api.github.com` |
-| `GITHUB_API_VERSION` | Explicit GitHub REST API version | `2026-03-10` |
-| `ECHO_MAX_CURRENT_FILES` | Maximum changed files inspected in a PR | `100` |
-| `ECHO_MAX_COMMITS_PER_PATH` | Recent commits inspected for each changed path | `20` |
-| `ECHO_MAX_UNIQUE_CANDIDATES` | Maximum deduplicated historical PR candidates | `40` |
-| `ECHO_MAX_RESULTS` | Maximum relevant echoes returned by ranking | `3` |
-| `ECHO_POSSIBLE_THRESHOLD` | Minimum score classified as a possible echo | `0.55` |
-| `ECHO_STRONG_THRESHOLD` | Minimum score classified as a strong echo | `0.72` |
+Set at least these values in `.env`:
 
-Never commit `.env`, private keys, installation tokens, or generated
-credentials. The private key is read from the configured file path and its
-contents must not be placed directly in `.env`.
+```dotenv
+GITHUB_APP_ID=123456
+GITHUB_PRIVATE_KEY_PATH=path/to/private-key.pem
+GITHUB_WEBHOOK_SECRET=replace-with-your-webhook-secret
+```
+
+The remaining settings in `.env.example` provide safe development defaults for
+API versioning, analysis limits, result limits, and scoring thresholds.
+
+Never commit `.env`, private keys, installation tokens, or other credentials.
 
 ## Run the application
 
-Start the development server:
+Start the FastAPI development server:
 
 ```bash
 uvicorn app.main:app --reload
 ```
 
-The health endpoint is available at <http://127.0.0.1:8000/health>.
-
-The GitHub webhook endpoint is:
+Available endpoints:
 
 ```text
+GET  /health
 POST /webhooks/github
 ```
 
-The installed GitHub App must have repository `Checks` permission set to
-`Read and write` so it can publish analysis results.
+The local health endpoint is available at
+<http://127.0.0.1:8000/health>.
 
-Supported pull-request actions are `opened`, `reopened`, `synchronize`, and
-`edited`. Unsupported events and actions are acknowledged and ignored. A pull
-request exceeding `ECHO_MAX_CURRENT_FILES` receives an explicit bounded-analysis
-response instead of being partially inspected.
-
-For an accepted pull request, the application also checks recent commits for
-each changed path and maps those commits to historical pull requests. Candidate
-discovery is deterministic and bounded. The final result is displayed as an
-advisory Check Run and does not intentionally block merging.
+To receive GitHub webhooks locally, expose port `8000` through a secure HTTPS
+tunnel and use its public URL in the GitHub App configuration.
 
 ## Development checks
 
+Run the automated tests:
+
 ```bash
 pytest
+```
+
+Run linting, formatting checks, and type checking:
+
+```bash
 ruff check .
 ruff format --check .
 mypy app
 ```
 
-Tests use mock HTTP transports and do not call live GitHub endpoints.
+Tests use mocked GitHub HTTP responses and do not call live GitHub endpoints.

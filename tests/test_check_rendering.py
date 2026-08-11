@@ -11,6 +11,7 @@ from app.github.check_rendering import (
     ADVISORY_TEXT,
     CheckRunConclusion,
     render_analysis_check,
+    render_analysis_failure_check,
     render_large_pull_request_check,
 )
 
@@ -139,6 +140,16 @@ def test_large_pull_request_renders_neutral_bounded_result() -> None:
     assert result.conclusion is CheckRunConclusion.NEUTRAL
     assert result.title == "Analysis skipped safely"
     assert "limit of 100 changed files" in result.summary
+    assert "does not block merging" in result.text
+
+
+def test_analysis_failure_renders_neutral_without_similarity_conclusion() -> None:
+    result = render_analysis_failure_check()
+
+    assert result.conclusion is CheckRunConclusion.NEUTRAL
+    assert result.title == "Analysis could not be completed"
+    assert result.summary == "Change Echo could not complete this analysis safely."
+    assert "No conclusion about historical similarity was produced" in result.text
     assert "does not block merging" in result.text
 
 

@@ -81,6 +81,19 @@ def render_large_pull_request_check(max_files: int) -> RenderedCheckRun:
     )
 
 
+def render_analysis_failure_check() -> RenderedCheckRun:
+    return RenderedCheckRun(
+        conclusion=CheckRunConclusion.NEUTRAL,
+        title="Analysis could not be completed",
+        summary="Change Echo could not complete this analysis safely.",
+        text=(
+            "No conclusion about historical similarity was produced. Retry the "
+            "analysis or verify the GitHub App configuration and permissions. "
+            "This result is advisory and does not block merging."
+        ),
+    )
+
+
 def _render_no_echo(
     *,
     changed_file_count: int,
