@@ -1,0 +1,15 @@
+{
+  "action": "opened",
+  "number": 42,
+  "installation": {
+    "id": 123456
+  },
+  "repository": {
+    "full_name": "octo-org/change-echo-test"
+  },
+  "pull_request": {
+    "head": {
+      "sha": "0123456789abcdef0123456789abcdef01234567"
+    }
+  }
+}
