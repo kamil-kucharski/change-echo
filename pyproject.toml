@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=75.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "change-echo"
+version = "0.1.0"
+description = "Repository memory for historically similar pull requests."
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115.0",
+    "pydantic-settings>=2.5.2",
+    "uvicorn>=0.30.6",
+]
+
+[project.optional-dependencies]
+dev = [
+    "httpx>=0.27.2",
+    "mypy>=1.11.2",
+    "pytest>=8.3.3",
+    "pytest-asyncio>=0.24.0",
+    "ruff>=0.6.9",
+]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-config --strict-markers"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unused_configs = true

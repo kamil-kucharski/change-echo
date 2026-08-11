@@ -1,0 +1,1 @@
+"""Change Echo application package."""
