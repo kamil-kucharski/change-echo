@@ -21,3 +21,5 @@ class Settings(BaseSettings):
     github_api_base_url: str = "https://api.github.com"
     github_api_version: str = "2026-03-10"
     echo_max_current_files: Annotated[int, Field(gt=0, le=2999)] = 100
+    echo_max_commits_per_path: Annotated[int, Field(gt=0, le=100)] = 20
+    echo_max_unique_candidates: Annotated[int, Field(gt=0)] = 40

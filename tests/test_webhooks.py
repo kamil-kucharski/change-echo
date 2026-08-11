@@ -2,7 +2,7 @@ import hashlib
 import hmac
 import json
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -16,6 +16,7 @@ from app.github.auth import InstallationAccessToken
 from app.github.client import GitHubAPIError, GitHubNotFoundError
 from app.github.models import PullRequestWebhookPayload
 from app.main import create_app
+from app.services.candidate_discovery import HistoricalPullRequestCandidate
 from app.services.pull_request_inspection import (
     CompletePullRequestInspection,
     PullRequestInspectionResult,
@@ -66,6 +67,40 @@ class StubPullRequestInspector:
         return self.result
 
 
+class StubCandidateDiscoverer:
+    def __init__(
+        self,
+        result: tuple[HistoricalPullRequestCandidate, ...] = (),
+        error: GitHubAPIError | None = None,
+    ) -> None:
+        self.result = result
+        self.error = error
+        self.requests: list[tuple[str, int, tuple[str, ...], int, int]] = []
+
+    async def discover(
+        self,
+        repository_full_name: str,
+        current_pull_request_number: int,
+        current_file_paths: Sequence[str],
+        installation_token: SecretStr,
+        max_commits_per_path: int,
+        max_unique_candidates: int,
+    ) -> tuple[HistoricalPullRequestCandidate, ...]:
+        assert installation_token.get_secret_value() == "temporary-installation-token"
+        self.requests.append(
+            (
+                repository_full_name,
+                current_pull_request_number,
+                tuple(current_file_paths),
+                max_commits_per_path,
+                max_unique_candidates,
+            )
+        )
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+
 def sign_payload(payload: bytes, secret: str = WEBHOOK_SECRET) -> str:
     digest = hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
     return f"sha256={digest}"
@@ -85,8 +120,15 @@ async def webhook_client(
     max_files: int = 100,
     inspection_result: PullRequestInspectionResult | None = None,
     inspection_error: GitHubAPIError | None = None,
+    candidate_result: tuple[HistoricalPullRequestCandidate, ...] = (),
+    candidate_error: GitHubAPIError | None = None,
 ) -> AsyncIterator[
-    tuple[AsyncClient, StubInstallationTokenProvider, StubPullRequestInspector]
+    tuple[
+        AsyncClient,
+        StubInstallationTokenProvider,
+        StubPullRequestInspector,
+        StubCandidateDiscoverer,
+    ]
 ]:
     settings = Settings(
         _env_file=None,
@@ -95,14 +137,16 @@ async def webhook_client(
     )
     token_provider = StubInstallationTokenProvider()
     inspector = StubPullRequestInspector(inspection_result, inspection_error)
+    discoverer = StubCandidateDiscoverer(candidate_result, candidate_error)
     application = create_app(
         settings,
         installation_token_provider=token_provider,
         pull_request_inspector=inspector,
+        candidate_discoverer=discoverer,
     )
     transport = ASGITransport(app=application)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        yield client, token_provider, inspector
+        yield client, token_provider, inspector, discoverer
 
 
 @pytest.fixture
@@ -117,7 +161,7 @@ async def test_valid_supported_delivery_is_accepted_and_logged(
 ) -> None:
     caplog.set_level(logging.INFO, logger="app.api.webhooks")
 
-    async with webhook_client() as (client, token_provider, inspector):
+    async with webhook_client() as (client, token_provider, inspector, discoverer):
         response = await client.post(
             "/webhooks/github",
             content=pull_request_payload,
@@ -130,9 +174,11 @@ async def test_valid_supported_delivery_is_accepted_and_logged(
     assert "octo-org/change-echo-test" in caplog.text
     assert "pr_number=42" in caplog.text
     assert "changed_files=0" in caplog.text
+    assert "candidate_count=0" in caplog.text
     assert WEBHOOK_SECRET not in caplog.text
     assert token_provider.requested_installation_ids == [123456]
     assert inspector.requests == [("octo-org/change-echo-test", 42, 100)]
+    assert discoverer.requests == [("octo-org/change-echo-test", 42, (), 20, 40)]
 
 
 @pytest.mark.asyncio
@@ -141,7 +187,7 @@ async def test_invalid_signature_is_rejected_before_payload_parsing() -> None:
     headers = github_headers(malformed_payload)
     headers["X-Hub-Signature-256"] = "sha256=invalid"
 
-    async with webhook_client() as (client, token_provider, inspector):
+    async with webhook_client() as (client, token_provider, inspector, discoverer):
         response = await client.post(
             "/webhooks/github",
             content=malformed_payload,
@@ -152,6 +198,7 @@ async def test_invalid_signature_is_rejected_before_payload_parsing() -> None:
     assert response.json() == {"detail": "Invalid webhook signature"}
     assert token_provider.requested_installation_ids == []
     assert inspector.requests == []
+    assert discoverer.requests == []
 
 
 @pytest.mark.asyncio
@@ -159,7 +206,7 @@ async def test_missing_signature_is_rejected(pull_request_payload: bytes) -> Non
     headers = github_headers(pull_request_payload)
     del headers["X-Hub-Signature-256"]
 
-    async with webhook_client() as (client, token_provider, inspector):
+    async with webhook_client() as (client, token_provider, inspector, discoverer):
         response = await client.post(
             "/webhooks/github",
             content=pull_request_payload,
@@ -169,13 +216,14 @@ async def test_missing_signature_is_rejected(pull_request_payload: bytes) -> Non
     assert response.status_code == 401
     assert token_provider.requested_installation_ids == []
     assert inspector.requests == []
+    assert discoverer.requests == []
 
 
 @pytest.mark.asyncio
 async def test_unsupported_event_is_ignored_without_parsing() -> None:
     malformed_payload = b"not-json"
 
-    async with webhook_client() as (client, token_provider, inspector):
+    async with webhook_client() as (client, token_provider, inspector, discoverer):
         response = await client.post(
             "/webhooks/github",
             content=malformed_payload,
@@ -186,6 +234,7 @@ async def test_unsupported_event_is_ignored_without_parsing() -> None:
     assert response.json() == {"status": "ignored"}
     assert token_provider.requested_installation_ids == []
     assert inspector.requests == []
+    assert discoverer.requests == []
 
 
 @pytest.mark.asyncio
@@ -196,7 +245,7 @@ async def test_unsupported_pull_request_action_is_ignored(
     payload_data["action"] = "closed"
     payload = json.dumps(payload_data).encode()
 
-    async with webhook_client() as (client, token_provider, inspector):
+    async with webhook_client() as (client, token_provider, inspector, discoverer):
         response = await client.post(
             "/webhooks/github",
             content=payload,
@@ -207,13 +256,14 @@ async def test_unsupported_pull_request_action_is_ignored(
     assert response.json() == {"status": "ignored"}
     assert token_provider.requested_installation_ids == []
     assert inspector.requests == []
+    assert discoverer.requests == []
 
 
 @pytest.mark.asyncio
 async def test_supported_delivery_requires_pull_request_context() -> None:
     payload = b'{"action":"opened"}'
 
-    async with webhook_client() as (client, token_provider, inspector):
+    async with webhook_client() as (client, token_provider, inspector, discoverer):
         response = await client.post(
             "/webhooks/github",
             content=payload,
@@ -224,6 +274,7 @@ async def test_supported_delivery_requires_pull_request_context() -> None:
     assert response.json() == {"detail": "Invalid webhook payload"}
     assert token_provider.requested_installation_ids == []
     assert inspector.requests == []
+    assert discoverer.requests == []
 
 
 def test_fixture_extracts_required_pull_request_context(
@@ -243,7 +294,12 @@ def test_fixture_extracts_required_pull_request_context(
 
 @pytest.mark.asyncio
 async def test_unconfigured_receiver_fails_safely(pull_request_payload: bytes) -> None:
-    async with webhook_client(secret=None) as (client, token_provider, inspector):
+    async with webhook_client(secret=None) as (
+        client,
+        token_provider,
+        inspector,
+        discoverer,
+    ):
         response = await client.post(
             "/webhooks/github",
             content=pull_request_payload,
@@ -254,6 +310,7 @@ async def test_unconfigured_receiver_fails_safely(pull_request_payload: bytes) -
     assert response.json() == {"detail": "Webhook receiver is not configured"}
     assert token_provider.requested_installation_ids == []
     assert inspector.requests == []
+    assert discoverer.requests == []
 
 
 @pytest.mark.asyncio
@@ -265,7 +322,7 @@ async def test_large_pull_request_returns_explicit_skipped_result(
     async with webhook_client(
         max_files=2,
         inspection_result=result,
-    ) as (client, token_provider, inspector):
+    ) as (client, token_provider, inspector, discoverer):
         response = await client.post(
             "/webhooks/github",
             content=pull_request_payload,
@@ -279,6 +336,7 @@ async def test_large_pull_request_returns_explicit_skipped_result(
     }
     assert token_provider.requested_installation_ids == [123456]
     assert inspector.requests == [("octo-org/change-echo-test", 42, 2)]
+    assert discoverer.requests == []
 
 
 @pytest.mark.asyncio
@@ -293,6 +351,7 @@ async def test_pull_request_inspection_failure_is_reported_coherently(
         client,
         token_provider,
         inspector,
+        discoverer,
     ):
         response = await client.post(
             "/webhooks/github",
@@ -306,3 +365,33 @@ async def test_pull_request_inspection_failure_is_reported_coherently(
     assert "temporary-installation-token" not in caplog.text
     assert token_provider.requested_installation_ids == [123456]
     assert inspector.requests == [("octo-org/change-echo-test", 42, 100)]
+    assert discoverer.requests == []
+
+
+@pytest.mark.asyncio
+async def test_candidate_discovery_failure_is_reported_coherently(
+    pull_request_payload: bytes,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.ERROR, logger="app.api.webhooks")
+    error = GitHubNotFoundError("GitHub API resource not found", status_code=404)
+
+    async with webhook_client(candidate_error=error) as (
+        client,
+        token_provider,
+        inspector,
+        discoverer,
+    ):
+        response = await client.post(
+            "/webhooks/github",
+            content=pull_request_payload,
+            headers=github_headers(pull_request_payload),
+        )
+
+    assert response.status_code == 502
+    assert response.json() == {"detail": "Historical candidate discovery failed"}
+    assert "stage=candidate_discovery" in caplog.text
+    assert "temporary-installation-token" not in caplog.text
+    assert token_provider.requested_installation_ids == [123456]
+    assert inspector.requests == [("octo-org/change-echo-test", 42, 100)]
+    assert discoverer.requests == [("octo-org/change-echo-test", 42, (), 20, 40)]

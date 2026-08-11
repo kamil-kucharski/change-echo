@@ -15,10 +15,14 @@ The application currently:
 - obtains an installation access token using the webhook installation ID;
 - retrieves the complete changed-file list for the current pull request;
 - stops inspection explicitly when the configured file limit is exceeded;
+- discovers historical pull-request candidates from recent commits touching the
+  current file paths;
+- deduplicates candidates, excludes the current pull request, and applies
+  deterministic discovery limits;
 - uses bounded pagination, request timeouts, and typed GitHub error handling.
 
-Historical candidate discovery, similarity scoring, and Check Run reporting are
-not implemented yet.
+Candidate enrichment, similarity scoring, and Check Run reporting are not
+implemented yet.
 
 ## Requirements
 
@@ -66,6 +70,8 @@ Set these values in the local `.env` file:
 | `GITHUB_API_BASE_URL` | GitHub REST API base URL | `https://api.github.com` |
 | `GITHUB_API_VERSION` | Explicit GitHub REST API version | `2026-03-10` |
 | `ECHO_MAX_CURRENT_FILES` | Maximum changed files inspected in a PR | `100` |
+| `ECHO_MAX_COMMITS_PER_PATH` | Recent commits inspected for each changed path | `20` |
+| `ECHO_MAX_UNIQUE_CANDIDATES` | Maximum deduplicated historical PR candidates | `40` |
 
 Never commit `.env`, private keys, installation tokens, or generated
 credentials. The private key is read from the configured file path and its
@@ -91,6 +97,11 @@ Supported pull-request actions are `opened`, `reopened`, `synchronize`, and
 `edited`. Unsupported events and actions are acknowledged and ignored. A pull
 request exceeding `ECHO_MAX_CURRENT_FILES` receives an explicit bounded-analysis
 response instead of being partially inspected.
+
+For an accepted pull request, the application also checks recent commits for
+each changed path and maps those commits to historical pull requests. Candidate
+discovery is deterministic and bounded, but candidates are not displayed on the
+pull request until scoring and Check Run reporting are implemented.
 
 ## Development checks
 

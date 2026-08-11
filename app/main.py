@@ -10,6 +10,10 @@ from app.api.webhooks import router as webhook_router
 from app.config import Settings
 from app.github.auth import GitHubAppAuthenticator, InstallationTokenProvider
 from app.github.client import DEFAULT_TIMEOUT_SECONDS, GitHubClient
+from app.services.candidate_discovery import (
+    CandidateDiscoverer,
+    GitHubCandidateDiscoverer,
+)
 from app.services.pull_request_inspection import (
     GitHubPullRequestInspector,
     PullRequestInspector,
@@ -20,6 +24,7 @@ def create_app(
     app_settings: Settings | None = None,
     installation_token_provider: InstallationTokenProvider | None = None,
     pull_request_inspector: PullRequestInspector | None = None,
+    candidate_discoverer: CandidateDiscoverer | None = None,
 ) -> FastAPI:
     resolved_settings = app_settings if app_settings is not None else Settings()
     logging.getLogger("app").setLevel(resolved_settings.log_level.upper())
@@ -29,6 +34,7 @@ def create_app(
         if (
             installation_token_provider is not None
             and pull_request_inspector is not None
+            and candidate_discoverer is not None
         ):
             yield
             return
@@ -50,6 +56,10 @@ def create_app(
                 application.state.pull_request_inspector = GitHubPullRequestInspector(
                     github_client
                 )
+            if candidate_discoverer is None:
+                application.state.candidate_discoverer = GitHubCandidateDiscoverer(
+                    github_client
+                )
             yield
 
     application = FastAPI(
@@ -62,6 +72,8 @@ def create_app(
         application.state.installation_token_provider = installation_token_provider
     if pull_request_inspector is not None:
         application.state.pull_request_inspector = pull_request_inspector
+    if candidate_discoverer is not None:
+        application.state.candidate_discoverer = candidate_discoverer
     application.include_router(health_router)
     application.include_router(webhook_router)
     return application

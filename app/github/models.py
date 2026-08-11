@@ -75,3 +75,11 @@ class PullRequestFile(BaseModel):
     deletions: int = Field(ge=0)
     changes: int = Field(ge=0)
     patch: str | None = None
+
+
+class RepositoryCommit(BaseModel):
+    sha: str = Field(min_length=1)
+
+
+class AssociatedPullRequest(BaseModel):
+    number: int = Field(gt=0)
