@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 SupportedPullRequestAction = Literal["opened", "reopened", "synchronize", "edited"]
 
@@ -20,6 +20,14 @@ class InstallationPayload(BaseModel):
 
 class RepositoryPayload(BaseModel):
     full_name: str = Field(min_length=1)
+
+    @field_validator("full_name")
+    @classmethod
+    def validate_full_name(cls, value: str) -> str:
+        parts = value.split("/")
+        if len(parts) != 2 or not all(parts):
+            raise ValueError("repository full name must contain owner and repository")
+        return value
 
 
 class PullRequestHeadPayload(BaseModel):
@@ -58,3 +66,12 @@ class PullRequestWebhookPayload(BaseModel):
             head_sha=self.pull_request.head.sha,
             installation_id=self.installation.id,
         )
+
+
+class PullRequestFile(BaseModel):
+    filename: str = Field(min_length=1)
+    status: str = Field(min_length=1)
+    additions: int = Field(ge=0)
+    deletions: int = Field(ge=0)
+    changes: int = Field(ge=0)
+    patch: str | None = None

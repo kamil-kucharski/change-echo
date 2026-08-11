@@ -5,12 +5,25 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import ValidationError
 
 from app.config import Settings
+from app.github.auth import GitHubConfigurationError, InstallationTokenProvider
+from app.github.client import (
+    GitHubAPIError,
+    GitHubNetworkError,
+    GitHubRateLimitError,
+    GitHubServerError,
+    GitHubTimeoutError,
+)
 from app.github.models import (
     SUPPORTED_PULL_REQUEST_ACTIONS,
     PullRequestActionEnvelope,
     PullRequestWebhookPayload,
 )
 from app.github.signatures import verify_webhook_signature
+from app.services.pull_request_inspection import (
+    CompletePullRequestInspection,
+    PullRequestInspector,
+    PullRequestTooLarge,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -21,10 +34,30 @@ def settings_from_request(request: Request) -> Settings:
     return app_settings
 
 
+def installation_token_provider_from_request(
+    request: Request,
+) -> InstallationTokenProvider:
+    provider: InstallationTokenProvider = request.app.state.installation_token_provider
+    return provider
+
+
+def pull_request_inspector_from_request(request: Request) -> PullRequestInspector:
+    inspector: PullRequestInspector = request.app.state.pull_request_inspector
+    return inspector
+
+
 @router.post("/webhooks/github")
 async def receive_github_webhook(
     request: Request,
     app_settings: Annotated[Settings, Depends(settings_from_request)],
+    token_provider: Annotated[
+        InstallationTokenProvider,
+        Depends(installation_token_provider_from_request),
+    ],
+    pull_request_inspector: Annotated[
+        PullRequestInspector,
+        Depends(pull_request_inspector_from_request),
+    ],
 ) -> dict[str, str]:
     raw_body = await request.body()
     webhook_secret = app_settings.github_webhook_secret
@@ -109,13 +142,119 @@ async def receive_github_webhook(
         ) from None
 
     context = payload.to_context(delivery_id)
+    try:
+        access_token = await token_provider.get_installation_access_token(
+            context.installation_id
+        )
+    except GitHubConfigurationError:
+        logger.error(
+            "github_webhook status=authentication_failed reason=configuration "
+            "delivery_id=%r repository=%r pr_number=%d",
+            context.delivery_id,
+            context.repository_full_name,
+            context.pull_request_number,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="GitHub App authentication is not configured",
+        ) from None
+    except (
+        GitHubNetworkError,
+        GitHubRateLimitError,
+        GitHubServerError,
+        GitHubTimeoutError,
+    ) as error:
+        logger.error(
+            "github_webhook status=authentication_failed error_type=%s "
+            "github_status=%r delivery_id=%r repository=%r pr_number=%d",
+            type(error).__name__,
+            error.status_code,
+            context.delivery_id,
+            context.repository_full_name,
+            context.pull_request_number,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="GitHub authentication is temporarily unavailable",
+        ) from None
+    except GitHubAPIError as error:
+        logger.error(
+            "github_webhook status=authentication_failed error_type=%s "
+            "github_status=%r delivery_id=%r repository=%r pr_number=%d",
+            type(error).__name__,
+            error.status_code,
+            context.delivery_id,
+            context.repository_full_name,
+            context.pull_request_number,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="GitHub authentication failed",
+        ) from None
+
+    try:
+        inspection = await pull_request_inspector.inspect(
+            repository_full_name=context.repository_full_name,
+            pull_request_number=context.pull_request_number,
+            installation_token=access_token.token,
+            max_files=app_settings.echo_max_current_files,
+        )
+    except (
+        GitHubNetworkError,
+        GitHubRateLimitError,
+        GitHubServerError,
+        GitHubTimeoutError,
+    ) as error:
+        logger.error(
+            "github_webhook status=analysis_failed error_type=%s "
+            "github_status=%r delivery_id=%r repository=%r pr_number=%d",
+            type(error).__name__,
+            error.status_code,
+            context.delivery_id,
+            context.repository_full_name,
+            context.pull_request_number,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Pull request inspection is temporarily unavailable",
+        ) from None
+    except GitHubAPIError as error:
+        logger.error(
+            "github_webhook status=analysis_failed error_type=%s "
+            "github_status=%r delivery_id=%r repository=%r pr_number=%d",
+            type(error).__name__,
+            error.status_code,
+            context.delivery_id,
+            context.repository_full_name,
+            context.pull_request_number,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Pull request inspection failed",
+        ) from None
+
+    if isinstance(inspection, PullRequestTooLarge):
+        logger.info(
+            "github_webhook status=analysis_skipped reason=pull_request_too_large "
+            "delivery_id=%r repository=%r pr_number=%d max_current_files=%d",
+            context.delivery_id,
+            context.repository_full_name,
+            context.pull_request_number,
+            inspection.max_files,
+        )
+        return {"status": "skipped", "reason": "pull_request_too_large"}
+
+    if not isinstance(inspection, CompletePullRequestInspection):
+        raise RuntimeError("Unexpected pull request inspection result")
+
     logger.info(
         "github_webhook status=accepted delivery_id=%r event=%r action=%r "
-        "repository=%r pr_number=%d",
+        "repository=%r pr_number=%d changed_files=%d",
         context.delivery_id,
         context.event,
         context.action,
         context.repository_full_name,
         context.pull_request_number,
+        len(inspection.files),
     )
     return {"status": "accepted"}
