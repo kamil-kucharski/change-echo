@@ -21,13 +21,14 @@ The application currently:
   deterministic discovery limits;
 - retains candidate titles, bodies, states, outcome timestamps, and links from
   GitHub's commit-to-pull-request response;
+- can enrich candidates with complete, bounded changed-file sets while skipping
+  isolated inaccessible, malformed, empty, or oversized candidates;
 - provides deterministic Echo scoring, classification, outcome classification,
   and ranking for enriched pull-request data;
 - uses bounded pagination, request timeouts, and typed GitHub error handling.
 
-Candidate changed-file collection and Check Run reporting are not implemented
-yet. The scoring module remains disconnected from live webhook processing until
-the candidate file sets are available.
+Candidate enrichment and scoring are not connected to live webhook processing
+yet. Check Run reporting is also not implemented.
 
 ## Requirements
 
