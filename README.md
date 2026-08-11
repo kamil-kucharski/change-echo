@@ -19,13 +19,15 @@ The application currently:
   current file paths;
 - deduplicates candidates, excludes the current pull request, and applies
   deterministic discovery limits;
+- retains candidate titles, bodies, states, outcome timestamps, and links from
+  GitHub's commit-to-pull-request response;
 - provides deterministic Echo scoring, classification, outcome classification,
   and ranking for enriched pull-request data;
 - uses bounded pagination, request timeouts, and typed GitHub error handling.
 
-Candidate enrichment and Check Run reporting are not implemented yet. The
-scoring module remains disconnected from live webhook processing until the
-required candidate metadata and changed-file sets are available.
+Candidate changed-file collection and Check Run reporting are not implemented
+yet. The scoring module remains disconnected from live webhook processing until
+the candidate file sets are available.
 
 ## Requirements
 

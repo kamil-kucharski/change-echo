@@ -20,6 +20,12 @@ GITHUB_PAGE_SIZE = 100
 @dataclass(frozen=True, slots=True)
 class HistoricalPullRequestCandidate:
     number: int
+    title: str
+    body: str | None
+    state: str
+    merged_at: str | None
+    closed_at: str | None
+    html_url: str | None
     matching_paths: tuple[str, ...]
 
 
@@ -76,28 +82,30 @@ class GitHubCandidateDiscoverer:
             key=lambda sha: (-len(commit_paths[sha]), first_seen[sha], sha),
         )
         candidate_paths: dict[int, set[str]] = {}
+        candidate_records: dict[int, AssociatedPullRequest] = {}
 
         for commit_sha in ordered_commits:
             if len(candidate_paths) >= max_unique_candidates:
                 break
 
             try:
-                async for pull_request_number in self._pull_requests_for_commit(
+                async for pull_request in self._pull_requests_for_commit(
                     owner,
                     repository,
                     commit_sha,
                     token,
                     max_pages=max_unique_candidates + 1,
                 ):
-                    if pull_request_number == current_pull_request_number:
+                    if pull_request.number == current_pull_request_number:
                         continue
 
-                    existing_paths = candidate_paths.get(pull_request_number)
+                    existing_paths = candidate_paths.get(pull_request.number)
                     if existing_paths is not None:
                         existing_paths.update(commit_paths[commit_sha])
                         continue
 
-                    candidate_paths[pull_request_number] = set(commit_paths[commit_sha])
+                    candidate_records[pull_request.number] = pull_request
+                    candidate_paths[pull_request.number] = set(commit_paths[commit_sha])
                     if len(candidate_paths) >= max_unique_candidates:
                         break
             except GitHubNotFoundError:
@@ -110,6 +118,12 @@ class GitHubCandidateDiscoverer:
         candidates = (
             HistoricalPullRequestCandidate(
                 number=number,
+                title=candidate_records[number].title,
+                body=candidate_records[number].body,
+                state=candidate_records[number].state,
+                merged_at=candidate_records[number].merged_at,
+                closed_at=candidate_records[number].closed_at,
+                html_url=candidate_records[number].html_url,
                 matching_paths=tuple(sorted(paths)),
             )
             for number, paths in candidate_paths.items()
@@ -155,7 +169,7 @@ class GitHubCandidateDiscoverer:
         commit_sha: str,
         token: str,
         max_pages: int,
-    ) -> AsyncIterator[int]:
+    ) -> AsyncIterator[AssociatedPullRequest]:
         path = (
             f"/repos/{quote(owner, safe='')}/{quote(repository, safe='')}"
             f"/commits/{quote(commit_sha, safe='')}/pulls"
@@ -167,16 +181,16 @@ class GitHubCandidateDiscoverer:
             max_pages=max_pages,
         ):
             payload = self._response_list(response)
-            page_numbers: set[int] = set()
+            page_pull_requests: dict[int, AssociatedPullRequest] = {}
             for item in payload:
                 try:
                     pull_request = AssociatedPullRequest.model_validate(item)
                 except ValidationError:
                     continue
-                page_numbers.add(pull_request.number)
+                page_pull_requests.setdefault(pull_request.number, pull_request)
 
-            for number in sorted(page_numbers, reverse=True):
-                yield number
+            for number in sorted(page_pull_requests, reverse=True):
+                yield page_pull_requests[number]
 
     @staticmethod
     def _response_list(response: httpx.Response) -> list[object]:

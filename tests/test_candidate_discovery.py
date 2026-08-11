@@ -17,6 +17,26 @@ def create_client(http_client: httpx.AsyncClient) -> GitHubClient:
     )
 
 
+def pull_request_payload(
+    number: int,
+    *,
+    title: str | None = None,
+    body: str | None = "Historical pull request body",
+    state: str = "closed",
+    merged_at: str | None = None,
+    closed_at: str | None = "2026-08-01T10:00:00Z",
+) -> dict[str, object]:
+    return {
+        "number": number,
+        "title": title or f"Historical pull request {number}",
+        "body": body,
+        "state": state,
+        "merged_at": merged_at,
+        "closed_at": closed_at,
+        "html_url": f"https://github.example/pulls/{number}",
+    }
+
+
 @pytest.mark.asyncio
 async def test_discovery_deduplicates_orders_and_excludes_current_pull_request() -> (
     None
@@ -31,9 +51,21 @@ async def test_discovery_deduplicates_orders_and_excludes_current_pull_request()
         elif file_path == "src/b.py":
             payload = [{"sha": "sha-b"}]
         elif request.url.path.endswith("/commits/sha-a/pulls"):
-            payload = [{"number": 42}, {"number": 7}, {"number": 5}]
+            payload = [
+                pull_request_payload(42),
+                pull_request_payload(
+                    7,
+                    title="Shared authentication change",
+                    state="closed",
+                    merged_at="2026-07-01T10:00:00Z",
+                ),
+                pull_request_payload(5),
+            ]
         elif request.url.path.endswith("/commits/sha-b/pulls"):
-            payload = [{"number": 7}, {"number": 9}]
+            payload = [
+                pull_request_payload(7, title="Ignored duplicate metadata"),
+                pull_request_payload(9),
+            ]
         else:
             raise AssertionError(f"Unexpected request: {request.url}")
         return httpx.Response(200, json=payload, request=request)
@@ -52,10 +84,34 @@ async def test_discovery_deduplicates_orders_and_excludes_current_pull_request()
     assert candidates == (
         HistoricalPullRequestCandidate(
             number=7,
+            title="Shared authentication change",
+            body="Historical pull request body",
+            state="closed",
+            merged_at="2026-07-01T10:00:00Z",
+            closed_at="2026-08-01T10:00:00Z",
+            html_url="https://github.example/pulls/7",
             matching_paths=("src/a.py", "src/b.py"),
         ),
-        HistoricalPullRequestCandidate(number=9, matching_paths=("src/b.py",)),
-        HistoricalPullRequestCandidate(number=5, matching_paths=("src/a.py",)),
+        HistoricalPullRequestCandidate(
+            number=9,
+            title="Historical pull request 9",
+            body="Historical pull request body",
+            state="closed",
+            merged_at=None,
+            closed_at="2026-08-01T10:00:00Z",
+            html_url="https://github.example/pulls/9",
+            matching_paths=("src/b.py",),
+        ),
+        HistoricalPullRequestCandidate(
+            number=5,
+            title="Historical pull request 5",
+            body="Historical pull request body",
+            state="closed",
+            merged_at=None,
+            closed_at="2026-08-01T10:00:00Z",
+            html_url="https://github.example/pulls/5",
+            matching_paths=("src/a.py",),
+        ),
     )
     assert requests == [
         ("/repos/octo-org/repository/commits", "src/a.py"),
@@ -78,7 +134,7 @@ async def test_discovery_prioritizes_multi_path_commits_and_stops_at_cap() -> No
         elif "/pulls" in request.url.path:
             commit_sha = request.url.path.split("/")[-2]
             associated_commit_requests.append(commit_sha)
-            payload = [{"number": 3}]
+            payload = [pull_request_payload(3)]
         else:
             raise AssertionError(f"Unexpected request: {request.url}")
         return httpx.Response(200, json=payload, request=request)
@@ -97,6 +153,12 @@ async def test_discovery_prioritizes_multi_path_commits_and_stops_at_cap() -> No
     assert candidates == (
         HistoricalPullRequestCandidate(
             number=3,
+            title="Historical pull request 3",
+            body="Historical pull request body",
+            state="closed",
+            merged_at=None,
+            closed_at="2026-08-01T10:00:00Z",
+            html_url="https://github.example/pulls/3",
             matching_paths=("src/a.py", "src/b.py"),
         ),
     )
@@ -116,7 +178,18 @@ async def test_discovery_skips_malformed_and_inaccessible_records() -> None:
             return httpx.Response(404, request=request)
         if request.url.path.endswith("/commits/good/pulls"):
             if request.url.params.get("page") == "2":
-                return httpx.Response(200, json=[{"number": 8}], request=request)
+                candidate = pull_request_payload(
+                    8,
+                    body=None,
+                    state="open",
+                    closed_at=None,
+                )
+                candidate.pop("html_url")
+                return httpx.Response(
+                    200,
+                    json=[candidate],
+                    request=request,
+                )
             return httpx.Response(
                 200,
                 headers={
@@ -142,7 +215,16 @@ async def test_discovery_skips_malformed_and_inaccessible_records() -> None:
         )
 
     assert candidates == (
-        HistoricalPullRequestCandidate(number=8, matching_paths=("src/a.py",)),
+        HistoricalPullRequestCandidate(
+            number=8,
+            title="Historical pull request 8",
+            body=None,
+            state="open",
+            merged_at=None,
+            closed_at=None,
+            html_url=None,
+            matching_paths=("src/a.py",),
+        ),
     )
 
 

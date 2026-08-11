@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -83,3 +83,9 @@ class RepositoryCommit(BaseModel):
 
 class AssociatedPullRequest(BaseModel):
     number: int = Field(gt=0)
+    title: str = Field(min_length=1)
+    body: str | None = None
+    state: str = Field(min_length=1)
+    merged_at: str | None = None
+    closed_at: str | None = None
+    html_url: Annotated[str, Field(min_length=1)] | None = None
